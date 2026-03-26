@@ -47,11 +47,7 @@ try:
 
     # 模型下载到当前项目目录下的 `model/bge-large-zh-v1.5`
     # 用相对路径避免写死盘符（比如 D:\）
-    model_path = os.path.join(
-        os.path.dirname(__file__),
-        "model",
-        "bge-large-zh-v1.5",
-    )
+    model_path =r"D:\models\bge-large-zh-v1.5"
 
     if os.path.exists(model_path):
         print("正在加载大模型...（可能需要几十秒）")

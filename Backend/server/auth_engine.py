@@ -5,11 +5,13 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
-from passlib.context import CryptContext
+# ❌ 移除 passlib
+# from passlib.context import CryptContext
+import bcrypt  # ✅ 直接使用 bcrypt
 from jose import jwt, JWTError
 import os
 
-from database import User, VerificationCode  # 从 database.py 导入模型
+from database import User, VerificationCode
 from email_service import email_service
 
 # 配置
@@ -18,31 +20,55 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 CODE_EXPIRE_MINUTES = 5
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+# ❌ 移除 pwd_context
+# pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 class AuthEngine:
-    """
-    用户认证引擎
-    用法:
-        1. 初始化: engine = AuthEngine(db_session)
-        2. 发送验证码: await engine.request_code(email, type="register")
-        3. 注册: result = engine.register(email, password, code)
-        4. 登录: token = engine.login(email, password)
-    """
-
     def __init__(self, db: Session):
         self.db = db
 
     def _generate_code(self) -> str:
-        """生成 6 位数字验证码"""
         return "".join(random.choices(string.digits, k=6))
 
     def _hash_password(self, password: str) -> str:
-        return pwd_context.hash(password)
+        """
+        直接使用 bcrypt 哈希密码，包含严格的长度截断保护
+        """
+        # 1. 转为 bytes
+        password_bytes = password.encode('utf-8')
+
+        # 2. 【核心修复】强制截断至 72 字节 (bcrypt 硬性限制)
+        if len(password_bytes) > 72:
+            password_bytes = password_bytes[:72]
+            print(f"[WARN] 密码过长，已截断至 72 字节")
+
+        # 3. 生成 salt 并哈希 (bcrypt.hashpw 返回 bytes)
+        # gensalt() 默认生成 12 轮，足够安全
+        hashed_bytes = bcrypt.hashpw(password_bytes, bcrypt.gensalt())
+
+        # 4. 转回 string 以便存入数据库
+        return hashed_bytes.decode('utf-8')
 
     def _verify_password(self, plain_password: str, hashed_password: str) -> bool:
-        return pwd_context.verify(plain_password, hashed_password)
+        """
+        直接使用 bcrypt 验证密码
+        """
+        try:
+            # 1. 转为 bytes
+            plain_bytes = plain_password.encode('utf-8')
+            hashed_bytes = hashed_password.encode('utf-8')
+
+            # 2. 同样需要截断 plain_password，确保与哈希时逻辑一致
+            if len(plain_bytes) > 72:
+                plain_bytes = plain_bytes[:72]
+
+            # 3. 验证
+            # bcrypt.checkpw 返回 True/False
+            return bcrypt.checkpw(plain_bytes, hashed_bytes)
+        except Exception as e:
+            print(f"[ERROR] 密码验证过程出错: {e}")
+            return False
 
     def _create_access_token(self, data: dict) -> str:
         to_encode = data.copy()
@@ -51,19 +77,9 @@ class AuthEngine:
         return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
     async def request_code(self, email: str, code_type: str) -> bool:
-        """
-        请求验证码 (注册 或 找回密码)
-        :param code_type: 'register' 或 'reset'
-        """
-        # 1. 检查频率限制 (可选：防止轰炸)
-        # 这里简化逻辑：如果 1 分钟内有未过期的码，则不重发
-
-        # 2. 生成新码
         code = self._generate_code()
         expire_time = datetime.utcnow() + timedelta(minutes=CODE_EXPIRE_MINUTES)
 
-        # 3. 存入数据库 (覆盖旧的)
-        # 先删除该邮箱该类型的旧码
         self.db.query(VerificationCode).filter(
             and_(VerificationCode.email == email, VerificationCode.type == code_type)
         ).delete()
@@ -78,15 +94,10 @@ class AuthEngine:
         self.db.add(new_code_obj)
         self.db.commit()
 
-        # 4. 发送邮件
         success = await email_service.send_verification_code(email, code)
         return success
 
     def register(self, email: str, password: str, code: str) -> Dict:
-        """
-        执行注册
-        :return: {"user_id": "...", "token": "..."} 或 抛出异常
-        """
         # 1. 验证验证码
         code_obj = self.db.query(VerificationCode).filter(
             and_(
@@ -107,27 +118,25 @@ class AuthEngine:
             raise ValueError("该邮箱已被注册")
 
         # 3. 创建用户
-        user_id = f"user_{random.randint(10000, 99999)}"  # 简单生成 ID
-        hashed_pw = self._hash_password(password)
+        user_id = f"user_{random.randint(10000, 99999)}"
+
+        # 调用新的哈希方法
+        try:
+            hashed_pw = self._hash_password(password)
+        except Exception as e:
+            raise ValueError(f"密码处理失败: {str(e)}")
 
         new_user = User(user_id=user_id, email=email, hashed_password=hashed_pw)
         self.db.add(new_user)
 
-        # 标记验证码已使用
         code_obj.is_used = True
-
         self.db.commit()
         self.db.refresh(new_user)
 
-        # 4. 生成 Token
         token = self._create_access_token({"sub": user_id, "email": email})
-
         return {"user_id": user_id, "email": email, "access_token": token, "token_type": "bearer"}
 
     def login(self, email: str, password: str) -> Dict:
-        """
-        执行登录
-        """
         user = self.db.query(User).filter(User.email == email).first()
         if not user:
             raise ValueError("用户不存在")
@@ -139,10 +148,6 @@ class AuthEngine:
         return {"user_id": user.user_id, "email": user.email, "access_token": token, "token_type": "bearer"}
 
     def reset_password(self, email: str, new_password: str, code: str) -> bool:
-        """
-        重置密码
-        """
-        # 1. 验证验证码
         code_obj = self.db.query(VerificationCode).filter(
             and_(
                 VerificationCode.email == email,
@@ -156,13 +161,11 @@ class AuthEngine:
         if not code_obj:
             raise ValueError("验证码无效或已过期")
 
-        # 2. 查找用户并更新密码
         user = self.db.query(User).filter(User.email == email).first()
         if not user:
             raise ValueError("用户不存在，请先注册")
 
         user.hashed_password = self._hash_password(new_password)
-        code_obj.is_used = True  # 标记使用
-
+        code_obj.is_used = True
         self.db.commit()
         return True
