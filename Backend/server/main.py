@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 import uvicorn
+import math
 
 # 3. 导入数据库 (此时环境变量已加载，数据库配置应该正常)
 try:
@@ -106,7 +107,18 @@ class MatchRequest(BaseModel):
     my_profile: ScheduleItem
     candidates: List[ScheduleItem]
 
+class LocationUpdate(BaseModel):
+    user_id: str
+    latitude: float
+    longitude: float
 
+class MatchRequestWithLocation(BaseModel):
+    user_id: str
+    latitude: float
+    longitude: float
+    radius_meters: int = 200  # 默认 200 米
+    # 本机用户的所有行程
+    my_schedules: List[ScheduleItem]
 # ================= 接口定义 =================
 
 @app.post("/api/auth/send-code")
@@ -194,6 +206,151 @@ def run_match(req: MatchRequest):
     result = match_engine.match(p, c_list)
     return {"matches": [{"id": r[0], "time": r[1], "content": r[2]} for r in result]}
 
+
+@app.post("/api/user/update-location")
+def update_location(req: LocationUpdate, db: Session = Depends(get_db)):
+    """
+    移动端定时调用此接口上报位置
+    """
+    user = db.query(User).filter(User.user_id == req.user_id).first()
+    if not user:
+        raise HTTPException(404, "用户不存在")
+
+    user.latitude = req.latitude
+    user.longitude = req.longitude
+    user.last_location_update = datetime.utcnow()
+
+    db.commit()
+    return {"msg": "位置更新成功", "time": user.last_location_update}
+
+
+@app.post("/api/match/find-nearby-comprehensive")
+def find_nearby_comprehensive(req: MatchRequestWithLocation, db: Session = Depends(get_db)):
+    """
+    核心匹配接口：
+    1. 更新本机位置
+    2. 筛选 200m 内且最近 10 分钟有更新的用户
+    3. 取出本机所有行程 vs 目标用户所有行程 进行全量匹配
+    """
+
+    # 1. 更新本机位置
+    current_user = db.query(User).filter(User.user_id == req.user_id).first()
+    if not current_user:
+        raise HTTPException(404, "用户不存在")
+
+    current_user.latitude = req.latitude
+    current_user.longitude = req.longitude
+    current_user.last_location_update = datetime.utcnow()
+    db.commit()
+
+    # 2. 获取所有潜在目标用户 (先全查出来，内存中过滤距离，SQLite 优化方案)
+    # 过滤条件：不是自己，且有位置信息，且 10 分钟内更新过 (避免匹配死人)
+    from datetime import timedelta
+    time_threshold = datetime.utcnow() - timedelta(minutes=10)
+
+    all_users = db.query(User).filter(
+        User.user_id != req.user_id,
+        User.latitude.isnot(None),
+        User.longitude.isnot(None),
+        User.last_location_update >= time_threshold
+    ).all()
+
+    valid_candidates = []
+
+    # 计算距离 (Haversine 公式)
+    lat1 = math.radians(req.latitude)
+    lon1 = math.radians(req.longitude)
+
+    for u in all_users:
+        lat2 = math.radians(u.latitude)
+        lon2 = math.radians(u.longitude)
+
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+
+        a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+        c = 2 * math.asin(math.sqrt(a))
+        distance_m = 6371000 * c  # 地球半径 6371km -> 米
+
+        if distance_m <= req.radius_meters:
+            valid_candidates.append({
+                "user": u,
+                "distance": distance_m
+            })
+
+    if not valid_candidates:
+        return {"matches": [], "msg": f"附近 {req.radius_meters}米内没有活跃用户"}
+
+    # 3. 全量行程匹配逻辑
+    final_matches = []
+
+    # 获取本机所有行程 (如果前端传了就用前端的，否则查库，这里假设前端传了最新的)
+    # 如果需要查库：my_schedules_db = db.query(Schedule).filter(Schedule.user_id == req.user_id).all()
+
+    for candidate in valid_candidates:
+        target_user = candidate["user"]
+        target_distance = candidate["distance"]
+
+        # 获取目标用户的所有行程
+        target_schedules = db.query(Schedule).filter(Schedule.user_id == target_user.user_id).all()
+
+        if not target_schedules:
+            continue
+
+        # 【核心循环】本机每一条 vs 目标每一条
+        # 注意：这里需要适配你的 MatcherEngine 输入格式
+        # 假设 MatcherEngine.match 接收 (my_profile, candidates_list)
+        # 但现在是多对多，我们需要遍历或者调整引擎
+
+        # 方案 A: 将本机的每个行程作为一次独立的匹配请求 (可能产生大量结果)
+        # 方案 B: 修改匹配逻辑，找出所有行程对中匹配度最高的
+
+        # 这里演示方案 A 的简化版：遍历本机行程，去匹配对方的所有行程
+        for my_sched in req.my_schedules:
+            # 构造对方行程列表供引擎比对
+            # 引擎通常需要对比一个主项和多个候选项
+            c_list_for_engine = [
+                (s.id, s.time_range, s.content) for s in target_schedules
+            ]
+
+            p_item = (my_sched.id or "local_tmp", my_sched.time_range, my_sched.content)
+
+            if match_engine:
+                # 调用大模型匹配
+                # 假设返回的是 [(id, time, content), ...] 排序后的列表
+                matched_results = match_engine.match(p_item, c_list_for_engine)
+
+                # 取匹配度最高的前 1 个（或者前 3 个）作为这两个用户在该行程下的推荐
+                if matched_results:
+                    best_match = matched_results[0]
+                    final_matches.append({
+                        "target_user_id": target_user.user_id,
+                        "target_email": target_user.email,  # 可能需要脱敏
+                        "distance_m": round(target_distance, 1),
+                        "my_schedule_title": my_sched.title,
+                        "matched_schedule_id": best_match[0],
+                        "matched_time": best_match[1],
+                        "matched_content": best_match[2],
+                        "score": "High"  # 如果有分数可以加上
+                    })
+            else:
+                # 降级：如果没有引擎，直接返回对方所有行程
+                for s in target_schedules:
+                    final_matches.append({
+                        "target_user_id": target_user.user_id,
+                        "distance_m": round(target_distance, 1),
+                        "matched_time": s.time_range,
+                        "matched_content": s.content
+                    })
+
+    # 按距离排序
+    final_matches.sort(key=lambda x: x["distance_m"])
+
+    return {
+        "msg": "匹配完成",
+        "total_nearby_users": len(valid_candidates),
+        "matches": final_matches[:20]  # 限制返回数量，避免前端卡顿
+    }
 
 if __name__ == "__main__":
     def _port_available(p: int) -> bool:
