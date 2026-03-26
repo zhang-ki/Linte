@@ -1,5 +1,5 @@
 # models.py
-from sqlalchemy import create_engine, Column, String, Boolean, DateTime, ForeignKey, Text
+from sqlalchemy import create_engine, Integer,Column, String, Boolean, DateTime, ForeignKey, Text
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from datetime import datetime
 import os
@@ -29,12 +29,16 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     schedules = relationship("Schedule", back_populates="owner")
 
+
 class VerificationCode(Base):
     __tablename__ = "verification_codes"
-    id = Column(String, primary_key=True, index=True)
-    email = Column(String, index=True, nullable=False)
+
+    # 加上 primary_key=True，SQLAlchemy 会自动处理自增
+    id = Column(Integer, primary_key=True, index=True)
+
+    email = Column(String, nullable=False, index=True)
     code = Column(String, nullable=False)
-    type = Column(String, nullable=False) # 'register' 或 'reset'
+    type = Column(String, nullable=False)  # register 或 reset
     expires_at = Column(DateTime, nullable=False)
     is_used = Column(Boolean, default=False)
 

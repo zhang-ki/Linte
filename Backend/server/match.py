@@ -1,262 +1,127 @@
+# filepath: d:\MatchModule\server\match.py
 import os
-from datetime import datetime
-from typing import List, Optional
-import socket
-import subprocess
-import re
-import time
+from datetime import datetime, timedelta
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+from typing import List, Tuple, Optional
 
 
-# 1. 先加载环境变量 (最重要！必须在导入其他自定义模块前做)
-from dotenv import load_dotenv
+class MatcherEngine:
+    """
+    日程匹配引擎
+    用法:
+        1. 初始化: engine = MatcherEngine(model_path="...")
+        2. 调用: result = engine.match(my_profile, candidates)
+    """
 
-load_dotenv()
+    def __init__(self, model_path: str, high_thresh: float = 0.77, low_thresh: float = 0.65):
+        """
+        初始化引擎并预加载模型 (只加载一次)
+        :param model_path: 模型文件夹路径
+        :param high_thresh: 高匹配度阈值
+        :param low_thresh: 低匹配度阈值
+        """
+        self.model_path = model_path
+        self.high_thresh = high_thresh
+        self.low_thresh = low_thresh
+        self.model = None
 
-# 2. 导入 FastAPI 相关
-from fastapi import FastAPI, Depends, HTTPException, status
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, EmailStr
-from sqlalchemy.orm import Session
-import uvicorn
+        # 启动时立即加载模型
+        self._load_model()
 
-# 3. 导入数据库 (此时环境变量已加载，数据库配置应该正常)
-try:
-    from database import engine, Base, get_db, User, Schedule
+    def _load_model(self):
+        """内部方法：加载模型"""
+        if not os.path.exists(self.model_path):
+            raise FileNotFoundError(f"[ERROR] 模型文件未找到: {self.model_path}")
 
-    # 初始化数据库表
-    Base.metadata.create_all(bind=engine)
-    print("数据库初始化成功")
-except Exception as e:
-    print(f"[ERROR] 数据库初始化失败: {e}")
-    raise e
-
-# 4. 导入认证引擎
-try:
-    from auth_engine import AuthEngine
-
-    print("认证引擎导入成功")
-except Exception as e:
-    print(f"[ERROR] 认证引擎导入失败: {e}")
-    raise e
-
-# 5. 尝试导入匹配引擎 (允许失败，不影响核心功能)
-match_engine = None
-try:
-    from match import MatcherEngine
-
-    # 模型下载到当前项目目录下的 `model/bge-large-zh-v1.5`
-    # 用相对路径避免写死盘符（比如 D:\）
-    model_path = os.path.join(
-        os.path.dirname(__file__),
-        "model",
-        "bge-large-zh-v1.5",
-    )
-
-    if os.path.exists(model_path):
-        print("正在加载大模型...（可能需要几十秒）")
-        match_engine = MatcherEngine(model_path=model_path)
-        print("匹配引擎加载成功")
-    else:
-        print(f"[WARN] 未找到模型文件夹 '{model_path}'")
-        print("匹配功能将不可用，但注册/登录/日程功能正常。")
-except Exception as e:
-    print(f"[WARN] 匹配引擎加载异常: {e}")
-    print("服务器将继续运行，仅匹配接口不可用。")
-
-# ================= 创建 App =================
-app = FastAPI(title="日程匹配与认证系统")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-# ================= 数据模型 (Schemas) =================
-class UserRegister(BaseModel):
-    email: EmailStr
-    password: str
-    code: str
-
-
-class UserLogin(BaseModel):
-    email: EmailStr
-    password: str
-
-
-class ResetPassword(BaseModel):
-    email: EmailStr
-    new_password: str
-    code: str
-
-
-class SendCodeReq(BaseModel):
-    email: EmailStr
-    type: str
-
-
-class ScheduleItem(BaseModel):
-    id: Optional[str] = None
-    title: str
-    time_range: str
-    content: str
-
-
-class MatchRequest(BaseModel):
-    my_profile: ScheduleItem
-    candidates: List[ScheduleItem]
-
-
-# ================= 接口定义 =================
-
-@app.post("/api/auth/send-code")
-async def send_code(req: SendCodeReq, db: Session = Depends(get_db)):
-    auth = AuthEngine(db)
-    if req.type not in ["register", "reset"]:
-        raise HTTPException(400, "类型错误")
-    success = await auth.request_code(req.email, req.type)
-    if not success:
-        # 如果是 Dummy 服务，这里会返回 False，但在测试环境我们可以假装成功
-        if os.getenv("QQ_EMAIL"):
-            raise HTTPException(500, "邮件发送失败")
-        else:
-            return {"msg": "验证码已生成 (模拟模式，请查看控制台日志)"}
-    return {"msg": "验证码已发送"}
-
-
-@app.post("/api/auth/register")
-def register(req: UserRegister, db: Session = Depends(get_db)):
-    auth = AuthEngine(db)
-    try:
-        return auth.register(req.email, req.password, req.code)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-
-
-@app.post("/api/auth/login")
-def login(req: UserLogin, db: Session = Depends(get_db)):
-    auth = AuthEngine(db)
-    try:
-        return auth.login(req.email, req.password)
-    except ValueError as e:
-        raise HTTPException(401, str(e))
-
-
-@app.post("/api/auth/reset-password")
-def reset_password(req: ResetPassword, db: Session = Depends(get_db)):
-    auth = AuthEngine(db)
-    try:
-        auth.reset_password(req.email, req.new_password, req.code)
-        return {"msg": "密码重置成功"}
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-
-
-@app.post("/api/schedule/")
-def create_schedule(item: ScheduleItem, db: Session = Depends(get_db)):
-    temp_user_id = "temp_user_001"
-    db_item = Schedule(
-        id=item.id or f"sched_{datetime.now().timestamp()}",
-        user_id=temp_user_id,
-        title=item.title,
-        time_range=item.time_range,
-        content=item.content
-    )
-    db.add(db_item)
-    db.commit()
-    db.refresh(db_item)
-    return db_item
-
-
-@app.get("/api/schedule/")
-def get_schedules(db: Session = Depends(get_db)):
-    return db.query(Schedule).all()
-
-
-@app.delete("/api/schedule/{schedule_id}")
-def delete_schedule(schedule_id: str, db: Session = Depends(get_db)):
-    item = db.query(Schedule).filter(Schedule.id == schedule_id).first()
-    if not item:
-        raise HTTPException(404, "日程未找到")
-    db.delete(item)
-    db.commit()
-    return {"msg": "删除成功"}
-
-
-@app.post("/api/match")
-def run_match(req: MatchRequest):
-    if not match_engine:
-        raise HTTPException(503, "匹配引擎未加载 (缺少模型文件或库)")
-
-    p = (req.my_profile.id or "p1", req.my_profile.time_range, req.my_profile.content)
-    c_list = [(c.id or f"c{i}", c.time_range, c.content) for i, c in enumerate(req.candidates)]
-
-    result = match_engine.match(p, c_list)
-    return {"matches": [{"id": r[0], "time": r[1], "content": r[2]} for r in result]}
-
-
-if __name__ == "__main__":
-    def _port_available(p: int) -> bool:
-        # 通过“尝试绑定”判断端口是否可用（立即释放 socket）
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                # 不使用 SO_REUSEADDR，避免“误判端口已被占用但仍能 bind”的情况
-                s.bind(("0.0.0.0", p))
-                return True
-            except OSError:
-                return False
-
-    def _find_free_port() -> int:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("127.0.0.1", 0))
-            return int(s.getsockname()[1])
-
-    def _kill_process_on_port(p: int) -> None:
-        # 仅用于开发环境：尝试查找并终止监听该端口的进程
+        print(f"正在加载匹配模型...（路径: {self.model_path}）")
         try:
-            output = subprocess.check_output(
-                ["netstat", "-ano"],
-                text=True,
-                encoding="utf-8",
-                errors="ignore",
-            )
-        except Exception:
-            return
+            # device='cpu' 可改为 'cuda' 如果有显卡
+            self.model = SentenceTransformer(self.model_path, device='cpu')
+            print("模型加载成功，引擎就绪。")
+        except Exception as e:
+            print(f"[ERROR] 模型加载失败: {e}")
+            raise e
 
-        for line in output.splitlines():
-            if f":{p}" not in line:
-                continue
-            if "LISTENING" not in line.upper():
-                continue
-            m = re.search(r"\s(\d+)\s*$", line)
-            if not m:
-                continue
-            pid = m.group(1)
-            try:
-                subprocess.run(["taskkill", "/PID", pid, "/F"], capture_output=True)
-                time.sleep(0.6)
-            except Exception:
-                pass
+    def _parse_time(self, time_str: str) -> Tuple[Optional[datetime], Optional[datetime]]:
+        """解析 'HH:MM-HH:MM'"""
+        try:
+            today = datetime.now().date()
+            if '-' not in time_str:
+                return None, None
+            s_str, e_str = time_str.split('-', 1)
+            start = datetime.combine(today, datetime.strptime(s_str.strip(), "%H:%M").time())
+            end = datetime.combine(today, datetime.strptime(e_str.strip(), "%H:%M").time())
+            if end < start:
+                end += timedelta(days=1)
+            return start, end
+        except:
+            return None, None
 
-    host = "0.0.0.0"
-    port = int(os.getenv("PORT", "8000"))
+    def _check_overlap(self, s1, e1, s2, e2) -> bool:
+        """检查时间交集"""
+        if not all([s1, e1, s2, e2]):
+            return False
+        return s1 < e2 and e1 > s2
 
-    print("服务器正在启动...")
+    def match(self, my_profile: Tuple[str, str, str], candidates: List[Tuple[str, str, str]]) -> List[
+        Tuple[str, str, str]]:
+        """
+        【核心调用接口】
+        输入:
+            my_profile: (id, time_range, content)
+            candidates: [(id, time_range, content), ...]
+        返回:
+            [(id, time_range, content), ...]  # 筛选并排序后的列表
+        """
+        if not self.model:
+            raise RuntimeError("模型未加载，无法执行匹配。")
 
-    # 尝试自动释放端口（避免反复报 winerror 10048）
-    for _ in range(3):
-        if _port_available(port):
-            break
-        print(f"[WARN] 端口 {port} 已被占用，尝试自动结束占用进程...")
-        _kill_process_on_port(port)
-        time.sleep(1)
-    else:
-        port = _find_free_port()
-        print(f"[WARN] 自动释放失败，改用端口 {port}")
+        if not candidates:
+            return []
 
-    print(f"本地访问: http://127.0.0.1:{port}")
-    print(f"文档地址: http://127.0.0.1:{port}/docs")
-    uvicorn.run(app, host=host, port=port)
+        # 1. 提取文本
+        my_text = my_profile[2]
+        candidate_texts = [c[2] for c in candidates]
+        all_texts = [my_text] + candidate_texts
+
+        # 2. 批量计算向量 (高性能关键)
+        embeddings = self.model.encode(all_texts, normalize_embeddings=True, show_progress_bar=False)
+        my_vec = embeddings[0].reshape(1, -1)
+
+        # 3. 解析我的时间
+        my_start, my_end = self._parse_time(my_profile[1])
+
+        scored_high = []
+        scored_fallback = []
+
+        # 4. 遍历计算分数和时间
+        for i, (c_id, time_str, text) in enumerate(candidates):
+            # 计算语义相似度
+            score = float(cosine_similarity(my_vec, embeddings[i + 1].reshape(1, -1))[0][0])
+
+            # 检查时间
+            c_start, c_end = self._parse_time(time_str)
+            is_time_ok = self._check_overlap(my_start, my_end, c_start, c_end)
+
+            if is_time_ok:
+                item = {'data': (c_id, time_str, text), 'score': score}
+                if score > self.high_thresh:
+                    scored_high.append(item)
+                elif self.low_thresh <= score <= self.high_thresh:
+                    scored_fallback.append(item)
+
+        # 5. 决策与排序
+        final_result = []
+
+        if scored_high:
+            # 策略A: 有高分，全部返回，按分数降序
+            scored_high.sort(key=lambda x: x['score'], reverse=True)
+            final_result = [item['data'] for item in scored_high]
+        elif scored_fallback:
+            # 策略B: 无高分，取前2个中等分，按分数降序
+            scored_fallback.sort(key=lambda x: x['score'], reverse=True)
+            top_2 = scored_fallback[:2]
+            final_result = [item['data'] for item in top_2]
+
+        return final_result
