@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>离线日程表</title>
+    <style>
+        /* CSS变量定义 */
+        :root {
+            --primary-color: #4FC3F7;
+            --secondary-color: #B3E5FC;
+            --accent-color: #FF8A65;
+            --text-color: #455A64;
+            --light-text: #78909C;
+            --background-color: #F5F7FA;
+            --card-background: #FFFFFF;
+            --border-color: #ECEFF1;
+            --shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            --border-radius: 12px;
+            --font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        /* 关闭按钮样式 */
+        .close-btn {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            width: 30px;
+            height: 30px;
+            border: none;
+            border-radius: 50%;
+            background-color: var(--light-text);
+            color: white;
+            font-size: 20px;
+            font-weight: bold;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .close-btn:hover {
+            background-color: #607D8B;
+            transform: rotate(90deg);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: var(--font-family);
+            background-color: var(--background-color);
+            padding: 20px;
+            color: var(--text-color);
+            background-image: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: var(--card-background);
+            border-radius: var(--border-radius);
+            box-shadow: var(--shadow);
+            padding: 20px;
+            margin-top: 90px;
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 10px;
+            color: var(--text-color);
+            font-weight: 600;
+        }
+
+        .date-display {
+            text-align: center;
+            margin-bottom: 20px;
+            font-weight: bold;
+            font-size: 18px;
+            color: var(--text-color);
+        }
+
+        .timetable-container {
+            margin-top: 20px;
+            overflow-x: auto;
+            border-radius: var(--border-radius);
+            box-shadow: var(--shadow);
+        }
+
+        .timetable {
+            display: flex;
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius);
+            overflow: hidden;
+        }
+
+        .time-column {
+            width: 60px;
+            background-color: var(--secondary-color);
+            border-right: 1px solid var(--border-color);
+            position: relative;
+        }
+
+        .time-slot {
+            height: 120px;
+            border-bottom: 1px solid var(--border-color);
+            position: relative;
+        }
+
+        .time-slot::after {
+            content: attr(data-time);
+            position: absolute;
+            top: -6px;
+            left: 0;
+            right: 0;
+            text-align: center;
+            font-size: 12px;
+            background-color: var(--secondary-color);
+            padding: 0 5px;
+            color: var(--text-color);
+            font-weight: 500;
+        }
+
+        .time-slot.blank::after {
+            content: '';
+        }
+
+        .time-slot.blank {
+            height: 60px; /* 0点之前的空白与24点之后的空白相同 */
+        }
+
+        .time-slot:last-child {
+            height: 60px; /* 24点之后的空白 */
+        }
+
+        .schedule-column {
+            flex: 1;
+            min-width: 300px;
+            background-color: var(--card-background);
+        }
+
+        .schedule-grid {
+            position: relative;
+        }
+
+        .grid-row {
+            height: 120px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .grid-row.blank {
+            height: 60px; /* 0点之前的空白与24点之后的空白相同 */
+        }
+
+        .grid-row.last {
+            height: 60px; /* 24点之后的空白 */
+        }
+
+        .schedule-item {
+            position: absolute;
+            background-color: var(--primary-color);
+            color: white;
+            border-radius: 8px;
+            padding: 10px;
+            font-size: 14px;
+            overflow: hidden;
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            transition: all 0.3s ease;
+        }
+
+        .schedule-item:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
+
+        .schedule-item .title {
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .schedule-item .time {
+            font-size: 12px;
+            opacity: 0.9;
+        }
+
+        .schedule-item .description {
+            font-size: 12px;
+            margin-top: 4px;
+            opacity: 0.9;
+        }
+
+        .schedule-item .actions {
+            margin-top: 5px;
+            display: flex;
+            gap: 5px;
+        }
+
+        .schedule-item .actions button {
+            padding: 2px 5px;
+            font-size: 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .schedule-item .actions .delete {
+            background-color: rgba(255, 255, 255, 0.3);
+        }
+
+        .schedule-item .actions .edit {
+            background-color: rgba(255, 255, 255, 0.5);
+        }
+    </style>
+</head>
+<body>
+    <!-- 固定常驻栏 -->
+    <div style="position: fixed; top: 0; left: 50%; transform: translateX(-50%); max-width: 800px; width: 100%; background-color: var(--card-background); box-shadow: 0 4px 12px rgba(0,0,0,0.1); z-index: 1000; padding: 15px 20px; display: flex; align-items: center; justify-content: space-between; border-bottom-left-radius: var(--border-radius); border-bottom-right-radius: var(--border-radius); backdrop-filter: blur(10px); background-color: rgba(255, 255, 255, 0.9);">
+        <div style="display: flex; gap: 10px;">
+            <button id="todo-btn" style="width: 45px; height: 45px; font-size: 20px; border-radius: 50%; border: none; background-color: var(--accent-color); color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(0,0,0,0.2); transition: all 0.3s ease;" title="待办">✅</button>
+            <button id="chat-btn" style="width: 45px; height: 45px; font-size: 20px; border-radius: 50%; border: none; background-color: var(--primary-color); color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(0,0,0,0.2); transition: all 0.3s ease;" title="聊天">💬</button>
+            <button id="settings-btn" style="width: 45px; height: 45px; font-size: 20px; border-radius: 50%; border: none; background-color: var(--light-text); color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(0,0,0,0.2); transition: all 0.3s ease;" title="设置">⚙️</button>
+        </div>
+        <div style="flex: 1; text-align: center; font-size: 24px; font-weight: 600; font-family: var(--font-family);">
+            <input type="date" id="date-display" style="cursor: pointer; border: none; background: none; font-size: 24px; font-weight: 600; outline: none; color: var(--text-color); font-family: var(--font-family);">
+        </div>
+        <div style="display: flex; gap: 10px;">
+            <button id="view-summary-btn" style="width: 45px; height: 45px; font-size: 20px; border-radius: 50%; border: none; background-color: #9c27b0; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(0,0,0,0.2); transition: all 0.3s ease;" title="查看总结">📝</button>
+            <button id="edit-summary-btn" style="width: 45px; height: 45px; font-size: 20px; border-radius: 50%; border: none; background-color: #ff9800; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(0,0,0,0.2); transition: all 0.3s ease;" title="编辑总结">✏️</button>
+            <button id="add-schedule-btn" style="width: 45px; height: 45px; font-size: 28px; border-radius: 50%; border: none; background-color: var(--primary-color); color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(0,0,0,0.2); transition: all 0.3s ease;">+</button>
+        </div>
+    </div>
+
+    <!-- 主界面 -->
+    <div id="main-page" class="container" style="margin-top: 90px; transition: all 0.5s ease;">
+
+
+
+        <!-- 日程详情模态框 -->
+        <div id="schedule-detail-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); z-index: 2000; backdrop-filter: blur(5px);">
+            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background-color: var(--card-background); padding: 25px; border-radius: var(--border-radius); width: 90%; max-width: 500px; box-shadow: 0 4px 20px rgba(0,0,0,0.15); position: relative;">
+                <button id="detail-close" class="close-btn" style="position: absolute; top: 15px; right: 15px;">×</button>
+                <h2 id="detail-title" style="margin-bottom: 20px; color: var(--text-color); font-weight: 600;">日程详情</h2>
+                <div id="detail-content" style="margin-bottom: 25px; padding: 20px; background-color: var(--background-color); border-radius: 8px;">
+                    <div style="margin-bottom: 15px;"><strong style="color: var(--light-text);">标题：</strong><span id="detail-schedule-title" style="color: var(--text-color);"></span></div>
+                    <div style="margin-bottom: 15px;"><strong style="color: var(--light-text);">日期：</strong><span id="detail-schedule-date" style="color: var(--text-color);"></span></div>
+                    <div style="margin-bottom: 15px;"><strong style="color: var(--light-text);">时间：</strong><span id="detail-schedule-time" style="color: var(--text-color);"></span></div>
+                    <div style="margin-bottom: 15px;"><strong style="color: var(--light-text);">地点：</strong><span id="detail-schedule-location" style="color: var(--text-color);"></span></div>
+                </div>
+                <div style="text-align: right; margin-top: 20px; display: flex; justify-content: flex-end; gap: 10px;">
+                    <button id="detail-edit" style="padding: 10px 20px; border: none; border-radius: 8px; background-color: var(--primary-color); color: white; cursor: pointer; transition: all 0.3s ease; font-weight: 500;">编辑</button>
+                    <button id="detail-delete" style="padding: 10px 20px; border: none; border-radius: 8px; background-color: #f44336; color: white; cursor: pointer; transition: all 0.3s ease; font-weight: 500;">删除</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 删除确认模态框 -->
+        <div id="delete-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); z-index: 2000; backdrop-filter: blur(5px);">
+            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background-color: var(--card-background); padding: 25px; border-radius: var(--border-radius); width: 90%; max-width: 400px; box-shadow: 0 4px 20px rgba(0,0,0,0.15); position: relative;">
+                <button id="delete-cancel" class="close-btn" style="position: absolute; top: 15px; right: 15px;">×</button>
+                <h2 style="margin-bottom: 20px; color: var(--text-color); font-weight: 600;">确认删除</h2>
+                <p style="margin-bottom: 25px; color: var(--light-text); font-size: 16px;">确定要删除这个日程吗？</p>
+                <div style="text-align: right; margin-top: 20px; display: flex; justify-content: flex-end; gap: 10px;">
+                    <button id="delete-confirm" style="padding: 10px 20px; border: none; border-radius: 8px; background-color: #f44336; color: white; cursor: pointer; transition: all 0.3s ease; font-weight: 500;">删除</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 日程模态框 -->
+        <div id="schedule-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); z-index: 2000; backdrop-filter: blur(5px);">
+            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background-color: var(--card-background); padding: 25px; border-radius: var(--border-radius); width: 90%; max-width: 500px; box-shadow: 0 4px 20px rgba(0,0,0,0.15); position: relative;">
+                <button id="modal-cancel" class="close-btn" style="position: absolute; top: 15px; right: 15px;">×</button>
+                <h2 id="modal-title" style="margin-bottom: 20px; color: var(--text-color); font-weight: 600;">添加日程</h2>
+                <form id="schedule-form">
+                    <div style="margin-bottom: 20px;">
+                        <label for="title" style="display: block; margin-bottom: 8px; color: var(--light-text); font-weight: 500;">标题</label>
+                        <input type="text" id="title" required style="width: 100%; padding: 10px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 16px; color: var(--text-color);">
+                    </div>
+                    <div style="margin-bottom: 20px;">
+                        <label for="date" style="display: block; margin-bottom: 8px; color: var(--light-text); font-weight: 500;">日期</label>
+                        <input type="date" id="date" required style="width: 100%; padding: 10px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 16px; color: var(--text-color);">
+                    </div>
+                    <div style="margin-bottom: 20px;">
+                        <label for="start-time" style="display: block; margin-bottom: 8px; color: var(--light-text); font-weight: 500;">开始时间</label>
+                        <input type="time" id="start-time" required style="width: 100%; padding: 10px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 16px; color: var(--text-color);">
+                    </div>
+                    <div style="margin-bottom: 20px;">
+                        <label for="end-time" style="display: block; margin-bottom: 8px; color: var(--light-text); font-weight: 500;">结束时间</label>
+                        <input type="time" id="end-time" required style="width: 100%; padding: 10px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 16px; color: var(--text-color);">
+                    </div>
+                    <div style="margin-bottom: 20px;">
+                        <label for="location" style="display: block; margin-bottom: 8px; color: var(--light-text); font-weight: 500;">地点</label>
+                        <div style="position: relative;">
+                            <input type="text" id="location" style="width: 100%; padding: 10px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 16px; color: var(--text-color);">
+                            <div id="location-dropdown" style="display: none; position: absolute; top: 100%; left: 0; right: 0; background-color: var(--card-background); border: 1px solid var(--border-color); border-top: none; border-radius: 0 0 8px 8px; max-height: 200px; overflow-y: auto; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.1);"></div>
+                        </div>
+                    </div>
+                    <div style="text-align: right; margin-top: 25px; display: flex; justify-content: flex-end; gap: 10px;">
+                        <button type="submit" style="padding: 10px 20px; border: none; border-radius: 8px; background-color: var(--primary-color); color: white; cursor: pointer; transition: all 0.3s ease; font-weight: 500;">保存</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+
+
+        <!-- 课程表 -->
+        <div class="timetable-container">
+            <div class="timetable">
+                <!-- 时间轴 -->
+                <div class="time-column">
+                    <!-- 0点之前的空白 -->
+                    <div class="time-slot blank"></div>
+                    <div class="time-slot" data-time="0"></div>
+                    <div class="time-slot" data-time="1"></div>
+                    <div class="time-slot" data-time="2"></div>
+                    <div class="time-slot" data-time="3"></div>
+                    <div class="time-slot" data-time="4"></div>
+                    <div class="time-slot" data-time="5"></div>
+                    <div class="time-slot" data-time="6"></div>
+                    <div class="time-slot" data-time="7"></div>
+                    <div class="time-slot" data-time="8"></div>
+                    <div class="time-slot" data-time="9"></div>
+                    <div class="time-slot" data-time="10"></div>
+                    <div class="time-slot" data-time="11"></div>
+                    <div class="time-slot" data-time="12"></div>
+                </div>
+                <!-- 日程区域 上午 -->
+                <div class="schedule-column">
+                    <div class="schedule-grid" id="schedule-grid-morning">
+                        <!-- 网格行 -->
+                        <div class="grid-row blank"></div>
+                        <div class="grid-row"></div>
+                        <div class="grid-row"></div>
+                        <div class="grid-row"></div>
+                        <div class="grid-row"></div>
+                        <div class="grid-row"></div>
+                        <div class="grid-row"></div>
+                        <div class="grid-row"></div>
+                        <div class="grid-row"></div>
+                        <div class="grid-row"></div>
+                        <div class="grid-row"></div>
+                        <div class="grid-row"></div>
+                        <div class="grid-row"></div>
+                    </div>
+                </div>
+                <!-- 时间轴 -->
+                <div class="time-column">
+                    <!-- 12点之前的空白（与第一列的0点之前空白对应） -->
+                    <div class="time-slot blank"></div>
+                    <div class="time-slot" data-time="12"></div>
+                    <div class="time-slot" data-time="13"></div>
+                    <div class="time-slot" data-time="14"></div>
+                    <div class="time-slot" data-time="15"></div>
+                    <div class="time-slot" data-time="16"></div>
+                    <div class="time-slot" data-time="17"></div>
+                    <div class="time-slot" data-time="18"></div>
+                    <div class="time-slot" data-time="19"></div>
+                    <div class="time-slot" data-time="20"></div>
+                    <div class="time-slot" data-time="21"></div>
+                    <div class="time-slot" data-time="22"></div>
+                    <div class="time-slot" data-time="23"></div>
+                    <div class="time-slot" data-time="24"></div>
+                </div>
+                <!-- 日程区域 下午 -->
+                <div class="schedule-column">
+                    <div class="schedule-grid" id="schedule-grid-afternoon">
+                        <!-- 网格行 -->
+                        <div class="grid-row blank"></div>
+                        <div class="grid-row"></div>
+                        <div class="grid-row"></div>
+                        <div class="grid-row"></div>
+                        <div class="grid-row"></div>
+                        <div class="grid-row"></div>
+                        <div class="grid-row"></div>
+                        <div class="grid-row"></div>
+                        <div class="grid-row"></div>
+                        <div class="grid-row"></div>
+                        <div class="grid-row"></div>
+                        <div class="grid-row"></div>
+                        <div class="grid-row"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+
+
+        <!-- 总结查看界面 -->
+        <div id="summary-view-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); z-index: 3000;">
+            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background-color: white; padding: 20px; border-radius: 8px; width: 90%; max-width: 800px; max-height: 80vh; overflow-y: auto; position: relative;">
+                <button id="close-summary-view" class="close-btn" style="position: absolute; top: 15px; right: 15px;">×</button>
+                <h2 style="margin-bottom: 20px;">总结管理</h2>
+                <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+                    <button id="tab-daily" class="summary-tab" style="padding: 10px 20px; border: none; border-radius: 4px; background-color: #4CAF50; color: white; cursor: pointer; transition: all 0.3s ease;">每日总结</button>
+                    <button id="tab-weekly" class="summary-tab" style="padding: 10px 20px; border: none; border-radius: 4px; background-color: #2196F3; color: white; cursor: pointer; transition: all 0.3s ease;">周总结</button>
+                    <button id="tab-monthly" class="summary-tab" style="padding: 10px 20px; border: none; border-radius: 4px; background-color: #ff9800; color: white; cursor: pointer; transition: all 0.3s ease;">月度总结</button>
+                    <button id="tab-yearly" class="summary-tab" style="padding: 10px 20px; border: none; border-radius: 4px; background-color: #9c27b0; color: white; cursor: pointer; transition: all 0.3s ease;">年度总结</button>
+                </div>
+                <div id="summary-content" style="padding: 20px; border: 1px solid #ddd; border-radius: 4px; background-color: #f9f9f9;">
+                    <!-- 总结内容将通过JavaScript动态加载 -->
+                </div>
+            </div>
+        </div>
+
+        <!-- 总结编辑界面 -->
+        <div id="summary-edit-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); z-index: 3000;">
+            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background-color: white; padding: 20px; border-radius: 8px; width: 90%; max-width: 600px; max-height: 80vh; overflow-y: auto; position: relative;">
+                <button id="close-summary-edit" class="close-btn" style="position: absolute; top: 15px; right: 15px;">×</button>
+                <h2 style="margin-bottom: 20px;">编辑总结</h2>
+
+                <div id="summary-edit-content">
+                    <!-- 编辑内容将通过JavaScript动态加载 -->
+                </div>
+            </div>
+        </div>
+
+        <!-- 待办界面 -->
+        <div id="todo-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); z-index: 3000;">
+            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background-color: white; padding: 20px; border-radius: 8px; width: 90%; max-width: 600px; max-height: 80vh; overflow-y: auto; position: relative;">
+                <button id="close-todo" class="close-btn" style="position: absolute; top: 15px; right: 15px;">×</button>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-right: 40px;">
+                    <h2>待办事项</h2>
+                    <button id="add-todo" style="width: 40px; height: 40px; font-size: 24px; border-radius: 50%; border: none; background-color: #4CAF50; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 4px rgba(0,0,0,0.2); transition: all 0.3s ease;" title="添加待办">+</button>
+                </div>
+
+                <div id="todo-content">
+                    <div style="margin-bottom: 20px;">
+                        <div id="todo-list" style="padding: 10px;">
+                            <!-- 待办事项列表将通过JavaScript动态生成 -->
+                        </div>
+                    </div>
+                    <div style="margin-top: 30px;">
+                        <h3 style="margin-bottom: 10px; color: #666;">已完成</h3>
+                        <div id="completed-list" style="padding: 10px;">
+                            <!-- 已完成事项列表将通过JavaScript动态生成 -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 添加待办事项界面 -->
+        <div id="add-todo-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); z-index: 3000;">
+            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background-color: white; padding: 20px; border-radius: 8px; width: 90%; max-width: 400px; position: relative;">
+                <button id="close-add-todo" class="close-btn" style="position: absolute; top: 15px; right: 15px;">×</button>
+                <h2 style="margin-bottom: 20px;">添加待办事项</h2>
+
+                <div style="margin-bottom: 20px;">
+                    <input type="text" id="new-todo-input" placeholder="请输入待办事项" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+                </div>
+                <div style="text-align: right;">
+                    <button id="save-new-todo" style="padding: 8px 16px; border: none; border-radius: 4px; background-color: #4CAF50; color: white; cursor: pointer; transition: all 0.3s ease;">保存</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 聊天页面 -->
+    <div id="chat-page" class="container" style="margin-top: 90px; display: none; transition: all 0.5s ease;">
+        <div style="display: flex; align-items: center; margin-bottom: 20px;">
+            <button id="back-from-chat" style="width: 40px; height: 40px; font-size: 20px; border-radius: 50%; border: none; background-color: var(--light-text); color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: all 0.3s ease; margin-right: 15px;" title="返回">←</button>
+            <h2>聊天</h2>
+        </div>
+        <div id="chat-content">
+            <!-- 聊天内容 -->
+        </div>
+    </div>
+
+    <!-- 设置页面 -->
+    <div id="settings-page" class="container" style="margin-top: 90px; display: none; transition: all 0.5s ease;">
+        <div style="display: flex; align-items: center; margin-bottom: 20px;">
+            <button id="back-from-settings" style="width: 40px; height: 40px; font-size: 20px; border-radius: 50%; border: none; background-color: var(--light-text); color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: all 0.3s ease; margin-right: 15px;" title="返回">←</button>
+            <h2>设置</h2>
+        </div>
+        <div id="settings-content">
+            <!-- 设置内容 -->
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
